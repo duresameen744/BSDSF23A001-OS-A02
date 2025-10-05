@@ -1,0 +1,44 @@
+**REPORT.md**
+
+Q: What is the crucial difference between stat() and lstat()? When to use lstat()?
+
+A: stat(path, &st) follows symbolic links — if path is a symlink, stat() returns metadata of the file that the link points to. lstat(path, &st) does not follow symlinks — it returns metadata about the link itself (type is S_IFLNK, permissions are the link's). For ls -l we should use lstat() because ls -l shows symbolic links as links (type l) and then typically prints the link target using readlink(). Using stat() would hide the fact that the file is a symlink by giving the target's type.
+
+Q: Explain how st_mode stores type and permissions and how to extract them using bitwise operators and macros.
+
+A: st_mode is an integer bitfield that encodes both the file type and permission bits. The file type bits are masked by S_IFMT (or inspected using helper macros like S_ISDIR(st_mode), S_ISREG(st_mode), S_ISLNK(st_mode)). Permission bits are tested using masks such as S_IRUSR (owner read), S_IWUSR (owner write), S_IXUSR (owner execute), and corresponding group/other bits (S_IRGRP, S_IWGRP, S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH). Example C test:
+
+if (st.st_mode & S_IRUSR) putchar('r'); else putchar('-');
+if (st.st_mode & S_IWUSR) putchar('w'); else putchar('-');
+if (st.st_mode & S_IXUSR) putchar('x'); else putchar('-');
+
+
+Special bits are S_ISUID, S_ISGID, and S_ISVTX (sticky). They modify the displayed execute characters to s/S or t/T depending on whether the execute bit is set. For file type you can do:
+
+switch (st.st_mode & S_IFMT) {
+    case S_IFDIR: puts("directory"); break;
+    case S_IFREG: puts("regular"); break;
+    case S_IFLNK: puts("symlink"); break;
+    // ...
+}
+
+
+or prefer the macros S_ISDIR(st.st_mode), S_ISREG(...), S_ISLNK(...) which are clearer and portable.
+
+7) Extra testing & debugging tips
+
+If make fails, ensure Makefile SRC path is exactly src/lsv1.0.0.c.
+
+If you see strange column alignment, list many files or check owner/group name lengths — the code computes maximum widths dynamically.
+
+To show hidden files (not part of this feature) you would add -a in parsing; that is saved for later features.
+
+If readlink() returns -1 for symlinks, check permissions; it normally works.
+
+8) What I did not change (and why)
+
+Sorting: I did not alphabetically sort entries (that’s Feature 5).
+
+Colorization: Feature 6.
+
+Recursive listing: Feature 7.
