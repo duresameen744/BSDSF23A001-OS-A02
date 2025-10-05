@@ -1,12 +1,10 @@
-/*
-* Programming Assignment 02: lsv1.0.0
-* This is the source file of version 1.0.0
-* Read the write-up of the assignment to add the features to this base version
-* Usage:
-*       $ lsv1.0.0 
-*       % lsv1.0.0  /home
-*       $ lsv1.0.0  /home/kali/   /etc/
-*/
+/* lsv1.0.0 -> updated to support -l (long listing) for v1.1.0
+ * Save as src/lsv1.0.0.c
+ *
+ * Compile with: make  (Makefile must point SRC to src/lsv1.0.0.c)
+ */
+
+#define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -14,50 +12,315 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <grp.h>
+#include <time.h>
+#include <limits.h>
+#include <stdbool.h>
 
-extern int errno;
+/* PATH_MAX fallback */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 void do_ls(const char *dir);
+void do_ls_long(const char *dir);
+void mode_to_str(mode_t mode, char out[11]);
+void format_mtime(time_t mtime, char *buf, size_t bufsize);
+char *join_path(const char *dir, const char *name);
 
-int main(int argc, char const *argv[])
+int main(int argc, char *argv[])
 {
-    if (argc == 1)
-    {
-        do_ls(".");
-    }
-    else
-    {
-        for (int i = 1; i < argc; i++)
-        {
-            printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i]);
-	    puts("");
+    int opt;
+    bool long_format = false;
+
+    /* parse options: only -l supported for this feature */
+    while ((opt = getopt(argc, argv, "l")) != -1) {
+        switch (opt) {
+            case 'l':
+                long_format = true;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-l] [dir...]\n", argv[0]);
+                exit(EXIT_FAILURE);
         }
     }
+
+    if (optind == argc) {
+        /* no directory arguments -> current directory */
+        if (long_format)
+            do_ls_long(".");
+        else
+            do_ls(".");
+    } else {
+        /* one or more directories */
+        for (int i = optind; i < argc; i++) {
+            printf("Directory listing of %s :\n", argv[i]);
+            if (long_format)
+                do_ls_long(argv[i]);
+            else
+                do_ls(argv[i]);
+            if (i < argc - 1) puts("");
+        }
+    }
+
     return 0;
 }
 
+/* original simple listing (keeps previous behavior) */
 void do_ls(const char *dir)
 {
     struct dirent *entry;
     DIR *dp = opendir(dir);
-    if (dp == NULL)
-    {
+    if (dp == NULL) {
         fprintf(stderr, "Cannot open directory : %s\n", dir);
         return;
     }
     errno = 0;
-    while ((entry = readdir(dp)) != NULL)
-    {
+    while ((entry = readdir(dp)) != NULL) {
         if (entry->d_name[0] == '.')
             continue;
         printf("%s\n", entry->d_name);
     }
 
-    if (errno != 0)
-    {
+    if (errno != 0) {
         perror("readdir failed");
     }
 
     closedir(dp);
+}
+
+/* ---- Long listing implementation ----
+   The approach:
+   - Read directory and collect entries (skip dotfiles)
+   - For each entry call lstat() to get metadata (so we do not follow symlinks)
+   - Compute column widths by scanning all entries
+   - Print lines aligned to those widths, printing "-> target" for symlinks
+*/
+void do_ls_long(const char *dir)
+{
+    DIR *dp = opendir(dir);
+    if (dp == NULL) {
+        fprintf(stderr, "Cannot open directory : %s\n", dir);
+        return;
+    }
+
+    struct dirent *entry;
+
+    /* dynamic array for entries */
+    size_t cap = 128;
+    size_t n = 0;
+    struct {
+        char *name;            /* file name */
+        char *path;            /* full path (malloced) */
+        struct stat st;        /* file metadata (from lstat) */
+        char mode[11];
+        char mtime[32];
+        char *owner;           /* malloced owner string */
+        char *group;           /* malloced group string */
+        char *link_target;     /* malloced if symlink (or NULL) */
+    } *files = calloc(cap, sizeof(*files));
+
+    if (!files) {
+        perror("calloc");
+        closedir(dp);
+        return;
+    }
+
+    /* Read dir and collect metadata */
+    while ((entry = readdir(dp)) != NULL) {
+        if (entry->d_name[0] == '.') continue; /* skip dotfiles for now */
+
+        if (n >= cap) {
+            cap *= 2;
+            files = realloc(files, cap * sizeof(*files));
+            if (!files) {
+                perror("realloc");
+                closedir(dp);
+                return;
+            }
+        }
+
+        files[n].name = strdup(entry->d_name);
+        if (!files[n].name) { perror("strdup"); break; }
+
+        /* create full path */
+        files[n].path = malloc(PATH_MAX);
+        if (!files[n].path) { perror("malloc"); break; }
+        snprintf(files[n].path, PATH_MAX, "%s/%s", dir, entry->d_name);
+
+        /* use lstat so symlinks are reported as links (not followed) */
+        if (lstat(files[n].path, &files[n].st) == -1) {
+            fprintf(stderr, "lstat failed for %s: %s\n", files[n].path, strerror(errno));
+            /* still include with zeroed stat? skip it */
+            free(files[n].name); free(files[n].path);
+            continue;
+        }
+
+        /* permission & type string */
+        mode_to_str(files[n].st.st_mode, files[n].mode);
+
+        /* formatted modification time (like ls -l "Mon dd HH:MM") */
+        format_mtime(files[n].st.st_mtime, files[n].mtime, sizeof(files[n].mtime));
+
+        /* owner name */
+        struct passwd *pw = getpwuid(files[n].st.st_uid);
+        if (pw) files[n].owner = strdup(pw->pw_name);
+        else {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", (unsigned)files[n].st.st_uid);
+            files[n].owner = strdup(buf);
+        }
+
+        /* group name */
+        struct group *gr = getgrgid(files[n].st.st_gid);
+        if (gr) files[n].group = strdup(gr->gr_name);
+        else {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", (unsigned)files[n].st.st_gid);
+            files[n].group = strdup(buf);
+        }
+
+        /* if symlink, read the target */
+        files[n].link_target = NULL;
+        if (S_ISLNK(files[n].st.st_mode)) {
+            char buf[PATH_MAX];
+            ssize_t len = readlink(files[n].path, buf, sizeof(buf)-1);
+            if (len != -1) {
+                buf[len] = '\0';
+                files[n].link_target = strdup(buf);
+            }
+        }
+
+        n++;
+    }
+
+    if (errno != 0) {
+        perror("readdir failed");
+    }
+
+    closedir(dp);
+
+    /* compute column widths */
+    size_t links_w = 1, owner_w = 1, group_w = 1, size_w = 1;
+    for (size_t i = 0; i < n; i++) {
+        /* links width */
+        unsigned long links = (unsigned long) files[i].st.st_nlink;
+        size_t d = 1;
+        unsigned long tmp = links;
+        while (tmp >= 10) { tmp /= 10; d++; }
+        if (d > links_w) links_w = d;
+
+        /* owner/group width */
+        size_t ow = strlen(files[i].owner);
+        if (ow > owner_w) owner_w = ow;
+        size_t gw = strlen(files[i].group);
+        if (gw > group_w) group_w = gw;
+
+        /* size width */
+        long long sz = (long long) files[i].st.st_size;
+        size_t sd = 1;
+        long long stmp = sz;
+        if (stmp < 0) stmp = -stmp; /* defensive */
+        while (stmp >= 10) { stmp /= 10; sd++; }
+        if (sd > size_w) size_w = sd;
+    }
+
+    /* print each file in long format */
+    for (size_t i = 0; i < n; i++) {
+        struct stat *s = &files[i].st;
+        /* example: -rwxr-xr-x  1 owner group  1234 Sep  9 12:34 name -> target */
+        printf("%s %*lu %-*s %-*s %*lld %s %s",
+               files[i].mode,
+               (int)links_w, (unsigned long)s->st_nlink,
+               (int)owner_w, files[i].owner,
+               (int)group_w, files[i].group,
+               (int)size_w, (long long)s->st_size,
+               files[i].mtime,
+               files[i].name);
+
+        if (files[i].link_target) {
+            printf(" -> %s", files[i].link_target);
+        }
+        printf("\n");
+    }
+
+    /* cleanup */
+    for (size_t i = 0; i < n; i++) {
+        free(files[i].name);
+        free(files[i].path);
+        free(files[i].owner);
+        free(files[i].group);
+        free(files[i].link_target);
+    }
+    free(files);
+}
+
+/* Convert st_mode into a 10-character string like -rwxr-xr-x\0 */
+void mode_to_str(mode_t mode, char out[11])
+{
+    /* file type */
+    char t = '?';
+    if (S_ISREG(mode)) t = '-';
+    else if (S_ISDIR(mode)) t = 'd';
+    else if (S_ISLNK(mode)) t = 'l';
+    else if (S_ISCHR(mode)) t = 'c';
+    else if (S_ISBLK(mode)) t = 'b';
+    else if (S_ISFIFO(mode)) t = 'p';
+    else if (S_ISSOCK(mode)) t = 's';
+
+    out[0] = t;
+
+    /* owner */
+    out[1] = (mode & S_IRUSR) ? 'r' : '-';
+    out[2] = (mode & S_IWUSR) ? 'w' : '-';
+    /* exec with setuid */
+    if (mode & S_ISUID) {
+        out[3] = (mode & S_IXUSR) ? 's' : 'S';
+    } else {
+        out[3] = (mode & S_IXUSR) ? 'x' : '-';
+    }
+
+    /* group */
+    out[4] = (mode & S_IRGRP) ? 'r' : '-';
+    out[5] = (mode & S_IWGRP) ? 'w' : '-';
+    /* exec with setgid */
+    if (mode & S_ISGID) {
+        out[6] = (mode & S_IXGRP) ? 's' : 'S';
+    } else {
+        out[6] = (mode & S_IXGRP) ? 'x' : '-';
+    }
+
+    /* others */
+    out[7] = (mode & S_IROTH) ? 'r' : '-';
+    out[8] = (mode & S_IWOTH) ? 'w' : '-';
+    /* exec with sticky bit */
+    if (mode & S_ISVTX) {
+        out[9] = (mode & S_IXOTH) ? 't' : 'T';
+    } else {
+        out[9] = (mode & S_IXOTH) ? 'x' : '-';
+    }
+
+    out[10] = '\0';
+}
+
+/* Format modification time similar to "ls -l": "Mon dd HH:MM" */
+void format_mtime(time_t mtime, char *buf, size_t bufsize)
+{
+    struct tm *tm = localtime(&mtime);
+    if (!tm) {
+        strncpy(buf, "??? ?? ??:??", bufsize);
+        return;
+    }
+    /* "%b %e %H:%M" -> "Sep  9 12:34" (note: %e may pad with space) */
+    strftime(buf, bufsize, "%b %e %H:%M", tm);
+}
+
+/* join path helper (not used by current code but kept for clarity) */
+char *join_path(const char *dir, const char *name) {
+    char *ret = malloc(PATH_MAX);
+    if (!ret) return NULL;
+    snprintf(ret, PATH_MAX, "%s/%s", dir, name);
+    return ret;
 }
