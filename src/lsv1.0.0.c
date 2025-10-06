@@ -18,7 +18,8 @@
 #include <time.h>
 #include <limits.h>
 #include <stdbool.h>
-
+#include <sys/ioctl.h>  // for ioctl(), TIOCGWINSZ
+#include <termios.h>    // terminal settings
 /* PATH_MAX fallback */
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -69,26 +70,54 @@ int main(int argc, char *argv[])
 }
 
 /* original simple listing (keeps previous behavior) */
-void do_ls(const char *dir)
-{
+void do_ls(const char *dir) {
     struct dirent *entry;
     DIR *dp = opendir(dir);
     if (dp == NULL) {
         fprintf(stderr, "Cannot open directory : %s\n", dir);
         return;
     }
-    errno = 0;
+
+    char **filenames = NULL;
+    int count = 0, max_len = 0;
+
     while ((entry = readdir(dp)) != NULL) {
         if (entry->d_name[0] == '.')
             continue;
-        printf("%s\n", entry->d_name);
-    }
 
-    if (errno != 0) {
-        perror("readdir failed");
+        filenames = realloc(filenames, (count + 1) * sizeof(char *));
+        filenames[count] = strdup(entry->d_name);
+        int len = strlen(entry->d_name);
+        if (len > max_len)
+            max_len = len;
+        count++;
     }
-
     closedir(dp);
+    if (count == 0) return;
+
+    struct winsize w;
+    int term_width = 80;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0)
+        term_width = w.ws_col;
+
+    int spacing = 2;
+    int col_width = max_len + spacing;
+    int num_cols = term_width / col_width;
+    if (num_cols < 1) num_cols = 1;
+    int num_rows = (count + num_cols - 1) / num_cols;
+
+    for (int row = 0; row < num_rows; row++) {
+        for (int col = 0; col < num_cols; col++) {
+            int index = col * num_rows + row;
+            if (index < count)
+                printf("%-*s", col_width, filenames[index]);
+        }
+        printf("\n");
+    }
+
+    for (int i = 0; i < count; i++)
+        free(filenames[i]);
+    free(filenames);
 }
 
 /* ---- Long listing implementation ----
