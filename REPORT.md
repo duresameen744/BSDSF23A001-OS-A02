@@ -35,10 +35,10 @@ To show hidden files (not part of this feature) you would add -a in parsing; tha
 
 If readlink() returns -1 for symlinks, check permissions; it normally works.
 
-8) What I did not change (and why)
+----FEATURE 3------------
+Why is one loop not enough?
+Because in “down then across,” items are not sequential in memory. You must jump indices like row + n*rows. A single loop would only print straight down, not across columns.
 
-Sorting: I did not alphabetically sort entries (that’s Feature 5).
-
-Colorization: Feature 6.
-
-Recursive listing: Feature 7.
+Purpose of ioctl()
+It retrieves terminal width dynamically.
+If you use a fixed width (like 80), your layout will break when terminal is resized.
