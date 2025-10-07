@@ -53,3 +53,55 @@ Q: What is the purpose of ioctl() here? What are the limitations of using a fixe
 
 A: ioctl() with TIOCGWINSZ returns the terminal window size (ws_col) so the program can pack columns to exactly the user’s terminal width — this is what allows the output to adapt when the user resizes the terminal. If we used a fixed fallback (e.g., 80) only, the layout would be suboptimal on wider or narrower terminals: on wide terminals we’d underutilize space (too few columns), and on narrow terminals we’d overflow or wrap incorrectly. Using ioctl() provides accurate, responsive formatting. The fallback is only used when ioctl() fails (e.g., output is piped, or not a controlling terminal) to keep behaviour safe in non-interactive environments.
 
+----------FEATURE 5---------------------
+
+Q1:
+
+Why is it necessary to read all directory entries into memory before you can sort them?
+
+Because sorting requires random access to all filenames at once. You can’t sort while reading one-by-one because you must compare filenames pairwise. Storing them first in an array allows qsort() to rearrange them efficiently.
+Drawback: For directories with millions of files, it can consume huge memory and slow performance, potentially causing memory exhaustion.
+
+Q2:
+
+Explain the purpose and signature of the comparison function required by qsort().
+
+int compare(const void *a, const void *b)
+This function tells qsort() how to order two elements. Since qsort works with generic data (void *), you must cast them back to the correct type (e.g., char **) and return:
+
+Negative → if a < b
+
+Zero → if a == b
+
+Positive → if a > b
+
+The const void * ensures qsort() does not modify the data through these pointers.
+
+------------------------FEATURE 6-----------------------
+
+Q — How do ANSI escape codes work? Show the code sequence for printing text in green.
+ANSI escape codes are special sequences beginning with the ESC character (ASCII 27), written \033 (or \x1b) followed by [ and parameters and a letter. To set text green and then reset, use:
+
+printf("\033[0;32m");   // set foreground green
+printf("myfile\n");
+printf("\033[0m");      // reset colors
+
+
+\033[0;32m means: reset attributes (0) then set foreground color 32 (green). \033[0m resets attributes to default.
+
+Q — Which st_mode bits indicate executability?
+To determine if a file is executable by owner, group, or others, check:
+
+Owner execute bit: st_mode & S_IXUSR
+
+Group execute bit: st_mode & S_IXGRP
+
+Others execute bit: st_mode & S_IXOTH
+
+---------------------------FEATURE 7------------------------------
+
+Q1: What is a “base case” in recursion? In your recursive ls, what is the base case?
+A base case is a condition where the recursive function stops calling itself and returns a result directly. Without a base case recursion would never end. In the recursive do_ls, the base case is implicitly reached when do_ls is called on a directory that contains no (non-hidden) subdirectories to recurse into. Each recursive call lists files and only calls do_ls on entries that are directories; when there are no such entries the function returns and recursion unwinds. A second protective base condition is that lstat() must succeed and the entry must be a directory and not . or .. — otherwise recursion does not continue.
+
+Q2: Why construct a full path parent_dir/subdir before recursing?
+You must construct the full path so lstat() and further opendir() operate on the correct file system location. If you simply call do_ls("subdir") while the current working directory is still parent_dir, it might work if you haven't changed CWD — but it becomes incorrect when the caller uses absolute paths or when recursion is deeper (relative paths will break). Using full paths (absolute or relative with parent prefix) guarantees the recursive call operates on the intended directory regardless of the current working directory or caller context. Also helps avoid name collisions when multiple directories with the same name exist in different parents.
