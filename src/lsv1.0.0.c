@@ -1,10 +1,10 @@
 /*
- * Programming Assignment 02: lsv1.3.0
- * Feature 4 – Horizontal Display (-x)
- * Builds upon Feature 3 (Column Display)
+ * Programming Assignment 02: lsv1.4.0
+ * Feature 5 – Alphabetical Sort
+ * Builds upon v1.3.0 (Horizontal Display)
  */
 
-#define _POSIX_C_SOURCE 200809L   // Enables strdup() and POSIX APIs
+#define _POSIX_C_SOURCE 200809L   // Enables strdup(), POSIX functions
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,12 +22,13 @@
 
 extern int errno;
 
-/* --- Function prototypes --- */
+/* --- Function Prototypes --- */
 void do_ls(const char *dir, int long_listing, int horizontal);
 void mode_to_string(mode_t mode, char *str);
 void format_time(time_t mtime, char *time_str);
 void display_columns(char **files, int count, int terminal_width);
 void display_horizontal(char **files, int count, int terminal_width);
+int compare_strings(const void *a, const void *b);
 
 /* --- Convert mode to permission string (e.g., -rw-r--r--) --- */
 void mode_to_string(mode_t mode, char *str)
@@ -49,11 +50,19 @@ void mode_to_string(mode_t mode, char *str)
 void format_time(time_t mtime, char *time_str)
 {
     char *raw_time = ctime(&mtime);
-    strncpy(time_str, raw_time + 4, 12); // e.g., "Sep 25 13:22"
+    strncpy(time_str, raw_time + 4, 12);
     time_str[12] = '\0';
 }
 
-/* --- Column Display (Down Then Across) --- */
+/* --- qsort Comparison Function for Alphabetical Sorting --- */
+int compare_strings(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
+}
+
+/* --- Column Display (down-then-across) --- */
 void display_columns(char **files, int count, int terminal_width)
 {
     if (count == 0)
@@ -66,7 +75,7 @@ void display_columns(char **files, int count, int terminal_width)
             max_len = len;
     }
 
-    int col_width = max_len + 2; // Add spacing
+    int col_width = max_len + 2;
     int num_cols = terminal_width / col_width;
     if (num_cols < 1) num_cols = 1;
     int num_rows = (count + num_cols - 1) / num_cols;
@@ -74,15 +83,14 @@ void display_columns(char **files, int count, int terminal_width)
     for (int row = 0; row < num_rows; row++) {
         for (int col = 0; col < num_cols; col++) {
             int index = row + col * num_rows;
-            if (index < count) {
+            if (index < count)
                 printf("%-*s", col_width, files[index]);
-            }
         }
         printf("\n");
     }
 }
 
-/* --- Horizontal Display (-x): Left-to-right, wrapping as needed --- */
+/* --- Horizontal Display (-x): Left-to-right wrapping --- */
 void display_horizontal(char **files, int count, int terminal_width)
 {
     if (count == 0)
@@ -112,28 +120,52 @@ void display_horizontal(char **files, int count, int terminal_width)
     printf("\n");
 }
 
-/* --- Core LS Function (Handles -l, -x, default) --- */
+/* --- Main LS Function --- */
 void do_ls(const char *dir, int long_listing, int horizontal)
 {
-    struct dirent *entry;
     DIR *dp = opendir(dir);
-    int count = 0;
-
-    if (dp == NULL) {
+    if (!dp) {
         fprintf(stderr, "Cannot open directory: %s\n", dir);
         return;
     }
 
-    // First pass: count and handle long listing
+    struct dirent *entry;
+    char **files = NULL;
+    int count = 0;
+
+    /* --- Step 1: Read all visible filenames into memory --- */
     errno = 0;
     while ((entry = readdir(dp)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-        count++;
+        if (entry->d_name[0] == '.') continue;
 
-        if (long_listing) {
+        files = realloc(files, (count + 1) * sizeof(char *));
+        if (!files) {
+            perror("realloc");
+            closedir(dp);
+            return;
+        }
+        files[count] = strdup(entry->d_name);
+        count++;
+    }
+
+    if (errno != 0) {
+        perror("readdir failed");
+    }
+
+    /* --- Step 2: Sort alphabetically --- */
+    qsort(files, count, sizeof(char *), compare_strings);
+
+    /* --- Step 3: Get terminal width --- */
+    struct winsize w;
+    int terminal_width = 80;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1)
+        terminal_width = w.ws_col;
+
+    /* --- Step 4: Display --- */
+    if (long_listing) {
+        for (int i = 0; i < count; i++) {
             char full_path[1024];
-            snprintf(full_path, sizeof(full_path), "%s/%s", dir, entry->d_name);
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, files[i]);
 
             struct stat file_stat;
             if (stat(full_path, &file_stat) == -1) {
@@ -155,49 +187,18 @@ void do_ls(const char *dir, int long_listing, int horizontal)
                    gr ? gr->gr_name : "unknown",
                    file_stat.st_size,
                    time_str,
-                   entry->d_name);
+                   files[i]);
         }
+    } else if (horizontal) {
+        display_horizontal(files, count, terminal_width);
+    } else {
+        display_columns(files, count, terminal_width);
     }
 
-    // Column or horizontal display
-    if (!long_listing) {
-        struct winsize w;
-        int terminal_width = 80; // default fallback
-
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1)
-            terminal_width = w.ws_col;
-
-        char **files = malloc(count * sizeof(char *));
-        if (!files) {
-            perror("malloc");
-            closedir(dp);
-            return;
-        }
-
-        rewinddir(dp);
-        int index = 0;
-        errno = 0;
-        while ((entry = readdir(dp)) != NULL) {
-            if (entry->d_name[0] == '.')
-                continue;
-            files[index] = strdup(entry->d_name);
-            index++;
-        }
-
-        // Choose layout
-        if (horizontal)
-            display_horizontal(files, count, terminal_width);
-        else
-            display_columns(files, count, terminal_width);
-
-        for (int i = 0; i < count; i++)
-            free(files[i]);
-        free(files);
-    }
-
-    if (errno != 0)
-        perror("readdir failed");
-
+    /* --- Step 5: Cleanup --- */
+    for (int i = 0; i < count; i++)
+        free(files[i]);
+    free(files);
     closedir(dp);
 }
 
@@ -210,21 +211,15 @@ int main(int argc, char const *argv[])
 
     while ((opt = getopt(argc, (char *const *)argv, "lx")) != -1) {
         switch (opt) {
-            case 'l':
-                long_listing = 1;
-                break;
-            case 'x':
-                horizontal = 1;
-                break;
+            case 'l': long_listing = 1; break;
+            case 'x': horizontal = 1; break;
             default:
                 fprintf(stderr, "Usage: %s [-l | -x] [directory...]\n", argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
 
-    int non_opt_args = argc - optind;
-
-    if (non_opt_args == 0) {
+    if (optind == argc) {
         do_ls(".", long_listing, horizontal);
     } else {
         for (int i = optind; i < argc; i++) {
