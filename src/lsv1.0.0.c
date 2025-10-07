@@ -1,37 +1,29 @@
 /*
-<<<<<<< HEAD
- * ls-v1.5.0 -> Colorized Output (Feature 6)
- * Builds on v1.4.0 (alphabetical sort + -l and -x)
+ * lsv1.6.0 - Recursive Listing (-R) with colorized output
+ * Builds on earlier features: -l, -x, alphabetical sort, color output
  */
 
 #define _POSIX_C_SOURCE 200809L
 
-=======
- * Programming Assignment 02: lsv1.4.0
- * Feature 5 – Alphabetical Sort
- * Complete implementation with alphabetical sorting for all display modes
- * FIXED: No compilation warnings
- */
-
-#define _POSIX_C_SOURCE 200809L
->>>>>>> feature-alphabetical-sort-v1.4.0
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <string.h>
-#include <unistd.h>
-#include <stdbool.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
 #include <sys/ioctl.h>
 #include <getopt.h>
-<<<<<<< HEAD
-#include <errno.h>
 #include <limits.h>
 
-/* --- ANSI color macros --- */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* ANSI colors */
 #define COLOR_RESET   "\033[0m"
 #define COLOR_BLUE    "\033[0;34m"   /* directories */
 #define COLOR_GREEN   "\033[0;32m"   /* executables */
@@ -39,674 +31,297 @@
 #define COLOR_PINK    "\033[1;35m"   /* symbolic links */
 #define COLOR_REVERSE "\033[7m"      /* special files */
 
-/* --- Function declarations --- */
-=======
+enum DisplayMode { DEFAULT_MODE, LONG_MODE, HORIZONTAL_MODE };
 
-// Function declarations
->>>>>>> feature-alphabetical-sort-v1.4.0
-void do_ls(const char *path, bool long_listing, bool horizontal);
-void simple_display(const char *path);
-void handle_long_listing(const char *path);
-void handle_horizontal_display(const char *path);
-void print_permissions(mode_t mode);
-void format_time(time_t mtime, char *time_str);
-int compare_strings(const void *a, const void *b);
-char **read_and_sort_filenames(const char *path, int *file_count);
+/* Prototypes */
+void do_ls(const char *dir, enum DisplayMode mode, int recursive);
+char **read_dir_filenames(const char *dir, int *count, int *maxlen);
+int compare_names(const void *a, const void *b);
 int get_terminal_width(void);
-<<<<<<< HEAD
-void print_colorized(const char *dir, const char *name);
+void print_colorized(const char *dir, const char *filename);
+void display_columns_default(char **names, int n, int maxlen, const char *dir);
+void display_horizontal(char **names, int n, int maxlen, const char *dir);
+void display_long(const char *path, const char *filename);
 
-/* --- Get terminal width --- */
-int get_terminal_width(void) {
+/* --- get terminal width (fallback 80) --- */
+int get_terminal_width(void)
+{
     struct winsize w;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1 || w.ws_col <= 0)
         return 80;
     return w.ws_col;
 }
 
-/* --- Compare strings for qsort --- */
-=======
-
-/* --- Get terminal width for column display --- */
-int get_terminal_width(void) {
-    struct winsize w;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1) {
-        return 80;  // Fallback width
-    }
-    return w.ws_col;
+/* --- alphabetical compare for qsort --- */
+int compare_names(const void *a, const void *b) {
+    const char *n1 = *(const char **)a;
+    const char *n2 = *(const char **)b;
+    return strcmp(n1, n2);
 }
 
-/* --- qsort comparison function for alphabetical sorting --- */
->>>>>>> feature-alphabetical-sort-v1.4.0
-int compare_strings(const void *a, const void *b) {
-    const char *str1 = *(const char **)a;
-    const char *str2 = *(const char **)b;
-    return strcmp(str1, str2);
-}
-
-<<<<<<< HEAD
-/* --- Read directory entries and sort alphabetically --- */
-char **read_and_sort_filenames(const char *path, int *file_count) {
-    DIR *dir = opendir(path);
-    if (!dir) return NULL;
-
-    size_t capacity = 64;
-    char **filenames = malloc(capacity * sizeof(char *));
-    if (!filenames) {
-        closedir(dir);
-        return NULL;
-    }
-
-    int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue; // skip hidden
-
-        if (count >= (int)capacity) {
-            capacity *= 2;
-            char **tmp = realloc(filenames, capacity * sizeof(char *));
-            if (!tmp) break;
-            filenames = tmp;
-        }
-        filenames[count] = strdup(entry->d_name);
-        if (!filenames[count]) break;
-        count++;
-    }
-    closedir(dir);
-
-    if (count > 0)
-        qsort(filenames, count, sizeof(char *), compare_strings);
-
-    *file_count = count;
-    return filenames;
-}
-
-/* --- Print permissions like rwxrwxrwx --- */
-void print_permissions(mode_t mode) {
-    /* File type */
-    if (S_ISDIR(mode))
-        putchar('d');
-    else if (S_ISLNK(mode))
-        putchar('l');
-    else
-        putchar('-');
-
-    /* Owner permissions */
-    putchar((mode & S_IRUSR) ? 'r' : '-');
-    putchar((mode & S_IWUSR) ? 'w' : '-');
-    putchar((mode & S_IXUSR) ? 'x' : '-');
-
-    /* Group permissions */
-    putchar((mode & S_IRGRP) ? 'r' : '-');
-    putchar((mode & S_IWGRP) ? 'w' : '-');
-    putchar((mode & S_IXGRP) ? 'x' : '-');
-
-    /* Others permissions */
-    putchar((mode & S_IROTH) ? 'r' : '-');
-    putchar((mode & S_IWOTH) ? 'w' : '-');
-    putchar((mode & S_IXOTH) ? 'x' : '-');
-}
-
-/* --- Format time --- */
-void format_time(time_t mtime, char *time_str) {
-    struct tm *tm_info = localtime(&mtime);
-    if (!tm_info) {
-        strcpy(time_str, "??? ?? ??:??");
+/* --- colorized printing, quiet on stat failure --- */
+void print_colorized(const char *dir, const char *filename) {
+    char full[PATH_MAX];
+    if (snprintf(full, sizeof(full), "%s/%s", dir, filename) >= (int)sizeof(full)) {
+        /* too long, print plain */
+        printf("%s", filename);
         return;
     }
-    strftime(time_str, 13, "%b %e %H:%M", tm_info);
-}
-
-/* --- Print a filename with color based on file type --- */
-void print_colorized(const char *dir, const char *name) {
-    char full[PATH_MAX];
-    snprintf(full, sizeof(full), "%s/%s", dir, name);
 
     struct stat st;
-    if (lstat(full, &st) == -1) {
-        printf("%s", name);
+    if (lstat(full, &st) < 0) {
+        /* cannot stat, print plain (do not spam perror) */
+        printf("%s", filename);
         return;
     }
 
     const char *color = COLOR_RESET;
 
-    if (S_ISDIR(st.st_mode))
-        color = COLOR_BLUE;
-    else if (S_ISLNK(st.st_mode))
-        color = COLOR_PINK;
+    if (S_ISDIR(st.st_mode)) color = COLOR_BLUE;
+    else if (S_ISLNK(st.st_mode)) color = COLOR_PINK;
     else if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) ||
-             S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode))
-        color = COLOR_REVERSE;
-    else if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
-        color = COLOR_GREEN;
-    else if (strstr(name, ".tar") || strstr(name, ".gz") || strstr(name, ".zip"))
-        color = COLOR_RED;
+             S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode)) color = COLOR_REVERSE;
+    else if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) color = COLOR_GREEN;
+    else {
+        /* archive detection by suffix */
+        const char *ext = strrchr(filename, '.');
+        if (ext && (strcmp(ext, ".tar") == 0 || strcmp(ext, ".gz") == 0 ||
+                    strcmp(ext, ".zip") == 0 || strcmp(ext, ".bz2") == 0 ||
+                    strcmp(ext, ".xz") == 0 || strcmp(ext, ".tgz") == 0))
+            color = COLOR_RED;
+    }
 
-    printf("%s%s%s", color, name, COLOR_RESET);
+    printf("%s%s%s", color, filename, COLOR_RESET);
 }
 
-/* --- Simple column display --- */
-void simple_display(const char *path) {
-    int count;
-    char **files = read_and_sort_filenames(path, &count);
-    if (!files || count == 0) {
-        if (files) free(files);
-        return;
-    }
+/* --- read dir entries into allocated array, return count and maxlen --- */
+char **read_dir_filenames(const char *dir, int *count, int *maxlen) {
+    DIR *dp = opendir(dir);
+    if (!dp) return NULL;
 
-    int max_len = 0;
-    for (int i = 0; i < count; i++) {
-        int len = strlen(files[i]);
-        if (len > max_len) max_len = len;
-    }
-
-    int width = get_terminal_width();
-    int col_width = max_len + 2;
-    int cols = width / col_width;
-    if (cols < 1) cols = 1;
-    int rows = (count + cols - 1) / cols;
-
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols; c++) {
-            int idx = r + c * rows;
-            if (idx < count) {
-                print_colorized(path, files[idx]);
-                int pad = col_width - strlen(files[idx]);
-                for (int p = 0; p < pad; p++) putchar(' ');
-=======
-/* --- Read directory and sort filenames alphabetically --- */
-char **read_and_sort_filenames(const char *path, int *file_count) {
-    DIR *dir = opendir(path);
-    if (!dir) {
-        perror("opendir");
-        return NULL;
-    }
-
-    // Initial allocation
-    size_t capacity = 64;
-    char **filenames = malloc(capacity * sizeof(char *));
-    if (!filenames) {
-        perror("malloc");
-        closedir(dir);
-        return NULL;
-    }
-
-    int count = 0;
     struct dirent *entry;
+    size_t cap = 64;
+    char **names = malloc(cap * sizeof(char *));
+    if (!names) { closedir(dp); return NULL; }
 
-    // Read all non-hidden filenames
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') {
-            continue; // Skip hidden files
-        }
+    int n = 0;
+    int maxl = 0;
+    errno = 0;
+    while ((entry = readdir(dp)) != NULL) {
+        if (entry->d_name[0] == '.') continue;  /* skip hidden */
+        int len = (int)strlen(entry->d_name);
+        if (len > maxl) maxl = len;
 
-        // Resize array if needed - FIXED: cast to int for comparison
-        if (count >= (int)capacity) {
-            capacity *= 2;
-            char **new_filenames = realloc(filenames, capacity * sizeof(char *));
-            if (!new_filenames) {
-                perror("realloc");
-                break;
-            }
-            filenames = new_filenames;
+        if (n >= (int)cap) {
+            cap *= 2;
+            char **tmp = realloc(names, cap * sizeof(char *));
+            if (!tmp) break;
+            names = tmp;
         }
-
-        // Store filename
-        filenames[count] = strdup(entry->d_name);
-        if (!filenames[count]) {
-            perror("strdup");
-            break;
-        }
-        count++;
+        names[n] = strdup(entry->d_name);
+        if (!names[n]) break;
+        n++;
     }
 
-    closedir(dir);
-
-    // Sort the filenames alphabetically
-    if (count > 0) {
-        qsort(filenames, count, sizeof(char *), compare_strings);
+    if (errno != 0) {
+        for (int i = 0; i < n; ++i) free(names[i]);
+        free(names);
+        closedir(dp);
+        return NULL;
     }
 
-    *file_count = count;
-    return filenames;
+    closedir(dp);
+
+    if (n > 0) qsort(names, n, sizeof(char *), compare_names);
+
+    *count = n;
+    *maxlen = maxl;
+    return names;
 }
 
-/* --- Convert st_mode into rwxrwxrwx string --- */
-void print_permissions(mode_t mode) {
-    printf((S_ISDIR(mode)) ? "d" : "-");
-    printf((mode & S_IRUSR) ? "r" : "-");
-    printf((mode & S_IWUSR) ? "w" : "-");
-    printf((mode & S_IXUSR) ? "x" : "-");
-    printf((mode & S_IRGRP) ? "r" : "-");
-    printf((mode & S_IWGRP) ? "w" : "-");
-    printf((mode & S_IXGRP) ? "x" : "-");
-    printf((mode & S_IROTH) ? "r" : "-");
-    printf((mode & S_IWOTH) ? "w" : "-");
-    printf((mode & S_IXOTH) ? "x" : "-");
-}
+/* --- long listing (single file) --- */
+void display_long(const char *path, const char *filename) {
+    char full[PATH_MAX];
+    if (snprintf(full, sizeof(full), "%s/%s", path, filename) >= (int)sizeof(full)) return;
 
-/* --- Format time like ls -l (Mon DD HH:MM) --- */
-void format_time(time_t mtime, char *time_str) {
-    struct tm *tm_info = localtime(&mtime);
-    if (!tm_info) {
-        strcpy(time_str, "??? ?? ??:??");
-        return;
-    }
-    strftime(time_str, 13, "%b %e %H:%M", tm_info);
-}
-
-/* --- Default column display (down then across) --- */
-void simple_display(const char *path) {
-    int file_count;
-    char **filenames = read_and_sort_filenames(path, &file_count);
-    if (!filenames || file_count == 0) {
-        if (filenames) {
-            for (int i = 0; i < file_count; i++) free(filenames[i]);
-            free(filenames);
-        }
+    struct stat st;
+    if (lstat(full, &st) < 0) {
+        /* skip printing if cannot stat */
         return;
     }
 
-    // Find maximum filename length
-    int max_len = 0;
-    for (int i = 0; i < file_count; i++) {
-        int len = strlen(filenames[i]);
-        if (len > max_len) max_len = len;
-    }
+    /* File type */
+    if (S_ISDIR(st.st_mode)) putchar('d');
+    else if (S_ISLNK(st.st_mode)) putchar('l');
+    else if (S_ISCHR(st.st_mode)) putchar('c');
+    else if (S_ISBLK(st.st_mode)) putchar('b');
+    else if (S_ISFIFO(st.st_mode)) putchar('p');
+    else if (S_ISSOCK(st.st_mode)) putchar('s');
+    else putchar('-');
 
-    // Calculate column layout
-    int terminal_width = get_terminal_width();
-    int col_width = max_len + 2;  // 2 spaces between columns
-    int num_cols = terminal_width / col_width;
-    if (num_cols < 1) num_cols = 1;
-    int num_rows = (file_count + num_cols - 1) / num_cols;  // Ceiling division
+    /* Permissions (owner/group/other), handle special bits if needed */
+    putchar((st.st_mode & S_IRUSR) ? 'r' : '-');
+    putchar((st.st_mode & S_IWUSR) ? 'w' : '-');
+    putchar((st.st_mode & S_IXUSR) ? 'x' : '-');
+    putchar((st.st_mode & S_IRGRP) ? 'r' : '-');
+    putchar((st.st_mode & S_IWGRP) ? 'w' : '-');
+    putchar((st.st_mode & S_IXGRP) ? 'x' : '-');
+    putchar((st.st_mode & S_IROTH) ? 'r' : '-');
+    putchar((st.st_mode & S_IWOTH) ? 'w' : '-');
+    putchar((st.st_mode & S_IXOTH) ? 'x' : '-');
 
-    // Print in "down then across" order
-    for (int row = 0; row < num_rows; row++) {
-        for (int col = 0; col < num_cols; col++) {
-            int index = row + col * num_rows;
-            if (index < file_count) {
-                printf("%-*s", col_width, filenames[index]);
->>>>>>> feature-alphabetical-sort-v1.4.0
-            }
+    /* link count, owner, group, size */
+    struct passwd *pw = getpwuid(st.st_uid);
+    struct group *gr = getgrgid(st.st_gid);
+    char timebuf[64];
+    struct tm *tm_info = localtime(&st.st_mtime);
+    if (tm_info) strftime(timebuf, sizeof(timebuf), "%b %e %H:%M", tm_info);
+    else strncpy(timebuf, "??? ?? ??:??", sizeof(timebuf));
+
+    printf(" %2lu %-8s %-8s %8lld %s ",
+           (unsigned long)st.st_nlink,
+           pw ? pw->pw_name : "-",
+           gr ? gr->gr_name : "-",
+           (long long)st.st_size,
+           timebuf);
+
+    /* name (colorized) */
+    print_colorized(path, filename);
+
+    /* symlink target */
+    if (S_ISLNK(st.st_mode)) {
+        char target[PATH_MAX];
+        ssize_t len = readlink(full, target, sizeof(target) - 1);
+        if (len > 0) {
+            target[len] = '\0';
+            printf(" -> %s", target);
         }
-        putchar('\n');
-    }
-
-<<<<<<< HEAD
-    for (int i = 0; i < count; i++) free(files[i]);
-    free(files);
-}
-
-/* --- Horizontal display (-x) --- */
-void handle_horizontal_display(const char *path) {
-    int count;
-    char **files = read_and_sort_filenames(path, &count);
-    if (!files || count == 0) {
-        if (files) free(files);
-=======
-    // Cleanup
-    for (int i = 0; i < file_count; i++) {
-        free(filenames[i]);
-    }
-    free(filenames);
-}
-
-/* --- Horizontal display (-x option) --- */
-void handle_horizontal_display(const char *path) {
-    int file_count;
-    char **filenames = read_and_sort_filenames(path, &file_count);
-    if (!filenames || file_count == 0) {
-        if (filenames) {
-            for (int i = 0; i < file_count; i++) free(filenames[i]);
-            free(filenames);
-        }
->>>>>>> feature-alphabetical-sort-v1.4.0
-        return;
-    }
-
-    // Find maximum filename length
-    int max_len = 0;
-<<<<<<< HEAD
-    for (int i = 0; i < count; i++) {
-        int len = strlen(files[i]);
-        if (len > max_len) max_len = len;
-    }
-
-    int width = get_terminal_width();
-    int col_width = max_len + 2;
-    int current = 0;
-
-    for (int i = 0; i < count; i++) {
-        int needed = col_width;
-        if (current + needed > width && current > 0) {
-            putchar('\n');
-            current = 0;
-        }
-
-        print_colorized(path, files[i]);
-        int pad = col_width - strlen(files[i]);
-        for (int p = 0; p < pad; p++) putchar(' ');
-        current += col_width;
     }
 
     putchar('\n');
-
-    for (int i = 0; i < count; i++) free(files[i]);
-    free(files);
 }
 
-/* --- Long listing (-l) --- */
-void handle_long_listing(const char *path) {
-    int count;
-    char **files = read_and_sort_filenames(path, &count);
-    if (!files || count == 0) {
-        if (files) free(files);
-        return;
-    }
+/* --- default column display (down then across) --- */
+void display_columns_default(char **names, int n, int maxlen, const char *dir) {
+    if (n <= 0) return;
+    int width = get_terminal_width();
+    int spacing = 2;
+    int col_width = maxlen + spacing;
+    if (col_width < 1) col_width = 1;
+    int cols = width / col_width;
+    if (cols < 1) cols = 1;
+    if (cols > n) cols = n;
+    int rows = (n + cols - 1) / cols;
 
-=======
-    for (int i = 0; i < file_count; i++) {
-        int len = strlen(filenames[i]);
-        if (len > max_len) max_len = len;
-    }
-
-    // Calculate display parameters
-    int terminal_width = get_terminal_width();
-    int col_width = max_len + 2;  // 2 spaces between items
-    int current_width = 0;
-
-    // Print in horizontal (row-major) order
-    for (int i = 0; i < file_count; i++) {
-        int needed_width = strlen(filenames[i]) + 2;
-        
-        // Wrap to next line if needed
-        if (current_width + needed_width > terminal_width && current_width > 0) {
-            printf("\n");
-            current_width = 0;
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            int i = c * rows + r;
+            if (i >= n) continue;
+            print_colorized(dir, names[i]);
+            int pad = col_width - (int)strlen(names[i]);
+            for (int p = 0; p < pad; ++p) putchar(' ');
         }
-        
-        printf("%-*s", col_width, filenames[i]);
-        current_width += col_width;
-    }
-    
-    if (file_count > 0) {
-        printf("\n");
-    }
-
-    // Cleanup
-    for (int i = 0; i < file_count; i++) {
-        free(filenames[i]);
-    }
-    free(filenames);
-}
-
-/* --- Long listing format (-l option) --- */
-void handle_long_listing(const char *path) {
-    int file_count;
-    char **filenames = read_and_sort_filenames(path, &file_count);
-    if (!filenames || file_count == 0) {
-        if (filenames) {
-            for (int i = 0; i < file_count; i++) free(filenames[i]);
-            free(filenames);
-        }
-        return;
-    }
-
-    // First pass: collect all file info and calculate column widths
->>>>>>> feature-alphabetical-sort-v1.4.0
-    struct file_info {
-        char *name;
-        struct stat st;
-        char time_str[13];
-        char *owner;
-        char *group;
-<<<<<<< HEAD
-        char *link_target;
-    } *info = malloc(count * sizeof(struct file_info));
-
-    if (!info) {
-        for (int i = 0; i < count; i++) free(files[i]);
-        free(files);
-        return;
-    }
-
-    size_t links_w = 1, owner_w = 1, group_w = 1, size_w = 1;
-
-    for (int i = 0; i < count; i++) {
-        info[i].name = files[i];
-        info[i].link_target = NULL;
-
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", path, files[i]);
-
-        if (lstat(full, &info[i].st) == -1) continue;
-
-        format_time(info[i].st.st_mtime, info[i].time_str);
-
-        struct passwd *pw = getpwuid(info[i].st.st_uid);
-        struct group *gr = getgrgid(info[i].st.st_gid);
-        info[i].owner = strdup(pw ? pw->pw_name : "?");
-        info[i].group = strdup(gr ? gr->gr_name : "?");
-
-        if (S_ISLNK(info[i].st.st_mode)) {
-            char target[PATH_MAX];
-            ssize_t len = readlink(full, target, sizeof(target) - 1);
-            if (len > 0) {
-                target[len] = '\0';
-                info[i].link_target = strdup(target);
-            }
-        }
-
-        size_t len;
-        len = snprintf(NULL, 0, "%lu", (unsigned long)info[i].st.st_nlink);
-        if (len > links_w) links_w = len;
-
-        len = strlen(info[i].owner);
-        if (len > owner_w) owner_w = len;
-
-        len = strlen(info[i].group);
-        if (len > group_w) group_w = len;
-
-        len = snprintf(NULL, 0, "%lld", (long long)info[i].st.st_size);
-        if (len > size_w) size_w = len;
-    }
-
-    for (int i = 0; i < count; i++) {
-        print_permissions(info[i].st.st_mode);
-        printf(" %*lu %-*s %-*s %*lld %s ",
-               (int)links_w, (unsigned long)info[i].st.st_nlink,
-               (int)owner_w, info[i].owner,
-               (int)group_w, info[i].group,
-               (int)size_w, (long long)info[i].st.st_size,
-               info[i].time_str);
-
-        print_colorized(path, info[i].name);
-        if (info[i].link_target) printf(" -> %s", info[i].link_target);
         putchar('\n');
     }
-
-    for (int i = 0; i < count; i++) {
-        free(info[i].owner);
-        free(info[i].group);
-        if (info[i].link_target) free(info[i].link_target);
-    }
-    free(info);
-
-    for (int i = 0; i < count; i++) free(files[i]);
-    free(files);
 }
 
-/* --- Master dispatcher --- */
-void do_ls(const char *path, bool long_listing, bool horizontal) {
-    if (long_listing)
-        handle_long_listing(path);
-    else if (horizontal)
-        handle_horizontal_display(path);
-    else
-        simple_display(path);
+/* --- horizontal (-x) left-to-right across rows --- */
+void display_horizontal(char **names, int n, int maxlen, const char *dir) {
+    if (n <= 0) { putchar('\n'); return; }
+    int width = get_terminal_width();
+    int spacing = 2;
+    int col_width = maxlen + spacing;
+    if (col_width < 1) col_width = 1;
+    if (col_width > width) col_width = width;
+
+    int cur = 0;
+    for (int i = 0; i < n; ++i) {
+        if (cur > 0 && cur + col_width > width) {
+            putchar('\n');
+            cur = 0;
+        }
+        print_colorized(dir, names[i]);
+        int pad = col_width - (int)strlen(names[i]);
+        for (int p = 0; p < pad; ++p) putchar(' ');
+        cur += col_width;
+    }
+    putchar('\n');
 }
 
-/* --- main() --- */
-int main(int argc, char *argv[]) {
-    int opt;
-    bool long_listing = false;
-    bool horizontal = false;
+/* --- recursive core --- */
+void do_ls(const char *dir, enum DisplayMode mode, int recursive) {
+    int n = 0, maxlen = 0;
+    char **names = read_dir_filenames(dir, &n, &maxlen);
+    if (!names) return;
 
-    while ((opt = getopt(argc, argv, "lx")) != -1) {
-        switch (opt) {
-            case 'l': long_listing = true; break;
-            case 'x': horizontal = true; break;
-=======
-    } *file_info = malloc(file_count * sizeof(struct file_info));
-
-    if (!file_info) {
-        perror("malloc");
-        for (int i = 0; i < file_count; i++) free(filenames[i]);
-        free(filenames);
-        return;
+    /* Print directory header only when recursive (so each directory in recursion shows header).
+       Top-level multiple-directory headers are handled in main (only when not recursive). */
+    if (recursive) {
+        printf("%s:\n", dir);
     }
 
-    size_t links_width = 1, owner_width = 1, group_width = 1, size_width = 1;
-
-    for (int i = 0; i < file_count; i++) {
-        file_info[i].name = filenames[i];
-        
-        char fullPath[1024];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, filenames[i]);
-
-        if (lstat(fullPath, &file_info[i].st) == -1) {
-            perror("lstat");
-            // Initialize with defaults to avoid crashes
-            file_info[i].owner = strdup("?");
-            file_info[i].group = strdup("?");
-            strcpy(file_info[i].time_str, "??? ?? ??:??");
-            continue;
-        }
-
-        // Format time
-        format_time(file_info[i].st.st_mtime, file_info[i].time_str);
-
-        // Get owner and group names
-        struct passwd *pw = getpwuid(file_info[i].st.st_uid);
-        struct group *gr = getgrgid(file_info[i].st.st_gid);
-        
-        if (pw) {
-            file_info[i].owner = strdup(pw->pw_name);
-        } else {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%u", (unsigned)file_info[i].st.st_uid);
-            file_info[i].owner = strdup(buf);
-        }
-        
-        if (gr) {
-            file_info[i].group = strdup(gr->gr_name);
-        } else {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%u", (unsigned)file_info[i].st.st_gid);
-            file_info[i].group = strdup(buf);
-        }
-
-        // Calculate column widths
-        // Links column
-        unsigned long links = file_info[i].st.st_nlink;
-        size_t link_digits = 1;
-        while (links >= 10) { links /= 10; link_digits++; }
-        if (link_digits > links_width) links_width = link_digits;
-
-        // Owner column
-        size_t owner_len = strlen(file_info[i].owner);
-        if (owner_len > owner_width) owner_width = owner_len;
-
-        // Group column
-        size_t group_len = strlen(file_info[i].group);
-        if (group_len > group_width) group_width = group_len;
-
-        // Size column
-        off_t size = file_info[i].st.st_size;
-        size_t size_digits = 1;
-        while (size >= 10) { size /= 10; size_digits++; }
-        if (size_digits > size_width) size_width = size_digits;
-    }
-
-    // Second pass: display all files with proper formatting
-    for (int i = 0; i < file_count; i++) {
-        char fullPath[1024];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, file_info[i].name);
-
-        if (lstat(fullPath, &file_info[i].st) == -1) {
-            continue; // Skip if we can't stat
-        }
-
-        // Print permissions
-        print_permissions(file_info[i].st.st_mode);
-        printf(" ");
-
-        // Print other fields with proper alignment
-        printf("%*lu %-*s %-*s %*ld %s %s\n",
-               (int)links_width, (unsigned long)file_info[i].st.st_nlink,
-               (int)owner_width, file_info[i].owner,
-               (int)group_width, file_info[i].group,
-               (int)size_width, (long)file_info[i].st.st_size,
-               file_info[i].time_str,
-               file_info[i].name);
-    }
-
-    // Cleanup
-    for (int i = 0; i < file_count; i++) {
-        free(file_info[i].owner);
-        free(file_info[i].group);
-    }
-    free(file_info);
-    
-    for (int i = 0; i < file_count; i++) {
-        free(filenames[i]);
-    }
-    free(filenames);
-}
-
-/* --- Main LS function that handles all modes --- */
-void do_ls(const char *path, bool long_listing, bool horizontal) {
-    if (long_listing) {
-        handle_long_listing(path);
-    } else if (horizontal) {
-        handle_horizontal_display(path);
+    /* display */
+    if (mode == LONG_MODE) {
+        for (int i = 0; i < n; ++i) display_long(dir, names[i]);
+    } else if (mode == HORIZONTAL_MODE) {
+        display_horizontal(names, n, maxlen, dir);
     } else {
-        simple_display(path);
+        display_columns_default(names, n, maxlen, dir);
     }
-}
 
-/* --- Main function --- */
-int main(int argc, char *argv[]) {
-    int opt;
-    bool long_listing = false;
-    bool horizontal = false;
+    /* recurse into directories */
+    if (recursive) {
+        for (int i = 0; i < n; ++i) {
+            /* build path */
+            char path[PATH_MAX];
+            if (snprintf(path, sizeof(path), "%s/%s", dir, names[i]) >= (int)sizeof(path)) continue;
 
-    // Parse command-line options
-    while ((opt = getopt(argc, argv, "lx")) != -1) {
-        switch (opt) {
-            case 'l':
-                long_listing = true;
-                break;
-            case 'x':
-                horizontal = true;
-                break;
->>>>>>> feature-alphabetical-sort-v1.4.0
-            default:
-                fprintf(stderr, "Usage: %s [-l | -x] [directory]\n", argv[0]);
-                return 1;
+            struct stat st;
+            if (lstat(path, &st) == 0) {
+                if (S_ISDIR(st.st_mode) && strcmp(names[i], ".") != 0 && strcmp(names[i], "..") != 0) {
+                    putchar('\n');  /* separate directories */
+                    do_ls(path, mode, recursive);
+                }
+            }
         }
     }
-<<<<<<< HEAD
-=======
 
-    // Determine directory to list
-    const char *path = (optind < argc) ? argv[optind] : ".";
+    /* cleanup */
+    for (int i = 0; i < n; ++i) free(names[i]);
+    free(names);
+}
 
-    do_ls(path, long_listing, horizontal);
->>>>>>> feature-alphabetical-sort-v1.4.0
+/* --- main --- */
+int main(int argc, char *argv[]) {
+    int opt;
+    enum DisplayMode mode = DEFAULT_MODE;
+    int recursive_flag = 0;
 
-    const char *path = (optind < argc) ? argv[optind] : ".";
-    do_ls(path, long_listing, horizontal);
+    while ((opt = getopt(argc, argv, "lxR")) != -1) {
+        switch (opt) {
+            case 'l': mode = LONG_MODE; break;
+            case 'x': mode = HORIZONTAL_MODE; break;
+            case 'R': recursive_flag = 1; break;
+            default:
+                fprintf(stderr, "Usage: %s [-l | -x | -R] [directory...]\n", argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
+
+    /* if no dir args, use "." */
+    if (optind == argc) {
+        do_ls(".", mode, recursive_flag);
+    } else {
+        int multi = (argc - optind > 1);
+        for (int i = optind; i < argc; ++i) {
+            /* print header for multiple directories only when NOT using recursive mode
+               (do_ls prints headers for recursive traversal itself) */
+            if (multi && !recursive_flag) {
+                printf("%s:\n", argv[i]);
+            }
+            do_ls(argv[i], mode, recursive_flag);
+            if (i < argc - 1) putchar('\n');
+        }
+    }
     return 0;
 }
